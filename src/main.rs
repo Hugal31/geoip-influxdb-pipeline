@@ -5,21 +5,29 @@ use std::error::Error;
 use clap::{App, Arg};
 use tokio::net::TcpListener;
 
-
-use rsyslog_ssh_geoip_pipeline::{geoip::ipstack::IpStackClient, Pipeline};
+use rsyslog_ssh_geoip_pipeline::{
+    geoip::{
+        ipstack::IpStackClient,
+        maxmind::MaxMindDb,
+    },
+    Pipeline
+};
 use std::sync::Arc;
+use rsyslog_ssh_geoip_pipeline::geoip::GeoIPResolver;
 
+// TODO Use option groups for maxmind and ipstack
 fn build_options() -> App<'static, 'static> {
     App::new("rsyslog-ssh-geoip-pipeline")
         .version(env!("CARGO_PKG_VERSION"))
         .author("Hugo Laloge <hugo.laloge@gmail.com>")
         .arg(
-            Arg::with_name("host")
-                .short("h")
-                .long("host")
-                .value_name("HOST")
+            Arg::with_name("listen")
+                .help("Listen address and port.")
+                .short("l")
+                .long("listen")
                 .takes_value(true)
-                .default_value("127.0.0.1"),
+                .value_name("LISTEN")
+                .default_value("127.0.0.1:7070"),
         )
         .arg(
             Arg::with_name("port")
@@ -36,39 +44,69 @@ fn build_options() -> App<'static, 'static> {
             .help("Precision of the geohash")
             .takes_value(true)
             .default_value("3"))
-        .arg(Arg::with_name("ipstack-api-key")
-            .long("ipstack-api-key")
-            .value_name("ACCESS_KEY")
+        .arg(Arg::with_name("ipstack")
+            .long("ipstack")
+            .help("Use ipstack to get the GEOIP info")
             .takes_value(true)
-            .required(true))
+            .value_name("ACCESS_KEY")
+            .conflicts_with("maxmind"))
+        .arg(Arg::with_name("maxmind")
+            .long("maxmind")
+            .help("Path the to maxmind city database.")
+            .takes_value(true)
+            .value_name("DATABASE_PATH")
+            .conflicts_with("ipstack"))
+}
+
+enum GeoIpSource {
+    IpStack {
+        access_key: String,
+    },
+    MaxMindDb {
+        database_path: String,
+    }
 }
 
 struct Arguments {
-    pub host: String,
-    pub port: String,
+    pub listen_address: String,
     pub precision: usize,
-    pub ipstack_key: String
+    pub geoip_source: GeoIpSource,
 }
 
 fn parse_arguments() -> Arguments {
     let matches = build_options().get_matches();
 
-    let host = matches.value_of("host").unwrap().to_owned();
-    let port = matches.value_of("port").unwrap().to_owned();
+    let listen_address = matches.value_of("listen").unwrap().to_owned();
     let precision = clap::value_t!(matches.value_of("precision"), usize).unwrap();
-    let ipstack_key = matches.value_of("ipstack-api-key").unwrap().to_owned();
 
-    Arguments { host, port, precision, ipstack_key }
+    let geoip_source = if matches.is_present("ipstack") {
+        let access_key = matches.value_of("ipstack").unwrap().to_owned();
+        GeoIpSource::IpStack { access_key }
+    } else if matches.is_present("maxmind") {
+        let database_path = matches.value_of("maxmind").unwrap().to_owned();
+        GeoIpSource::MaxMindDb { database_path }
+    } else {
+        panic!("Missing ipstack or maxmind argument");
+    };
+
+    Arguments { listen_address, precision, geoip_source }
+}
+
+fn create_geoip_source(source: GeoIpSource) -> Result<Box<dyn GeoIPResolver + Send + Sync + 'static>, Box<dyn Error>> {
+    Ok(match source {
+        GeoIpSource::IpStack { access_key } => Box::new(IpStackClient::new(access_key)),
+        GeoIpSource::MaxMindDb { database_path } => Box::new(MaxMindDb::new(database_path)?),
+    })
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_arguments();
-    let mut listener = TcpListener::bind(format!("{}:{}", args.host, args.port)).await?;
+    let mut listener = TcpListener::bind(args.listen_address).await?;
 
     let pipeline = Arc::new(Pipeline {
         influxdb_client: influx_db_client::Client::new("http://localhost:8086".parse()?, "monitoring"),
-        geoip_resolver: IpStackClient::new(args.ipstack_key),
+        geoip_resolver: create_geoip_source(args.geoip_source)?,
         geohash_precision: args.precision,
     });
 

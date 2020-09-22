@@ -46,10 +46,6 @@ impl IpStackClient {
 impl GeoIPResolver for IpStackClient {
     async fn get_geoip(&self, ip: &str, precision: usize) -> Result<String, Box<dyn Error>> {
         let geoip_record = self.request(ip).await?;
-        let coordinates = geohash::Coordinate {
-            x: geoip_record.longitude,
-            y: geoip_record.latitude,
-        };
-        geohash::encode(coordinates, precision).map_err(Into::into)
+        super::geohash_from_coordinate(geoip_record.latitude, geoip_record.longitude, precision)
     }
 }

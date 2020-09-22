@@ -27,13 +27,13 @@ pub struct AuthAttemptRecord {
     ip: String,
 }
 
-pub struct Pipeline<G: GeoIPResolver> {
+pub struct Pipeline {
     pub influxdb_client: InfluxDbClient,
-    pub geoip_resolver: G,
+    pub geoip_resolver: Box<dyn GeoIPResolver + Sync + Send + 'static>,
     pub geohash_precision: usize
 }
 
-impl<G: GeoIPResolver> Pipeline<G> {
+impl Pipeline {
     pub async fn handle_client(&self, client: TcpStream) -> Result<(), Box<dyn Error>> {
         let mut reader = BufReader::new(client);
 
