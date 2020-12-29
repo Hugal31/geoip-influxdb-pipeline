@@ -30,6 +30,10 @@ fn build_options() -> App<'static, 'static> {
                 .takes_value(true)
                 .default_value("7070"),
         )
+        .arg(Arg::with_name("retention-policy")
+             .long("retention-policy")
+             .value_name("RETENTION_POLICY")
+             .takes_value(true))
         .arg(Arg::with_name("precision")
             .long("precision")
             .value_name("PRECISION")
@@ -47,7 +51,8 @@ struct Arguments {
     pub host: String,
     pub port: String,
     pub precision: usize,
-    pub ipstack_key: String
+    pub ipstack_key: String,
+    pub retention_policy: Option<String>,
 }
 
 fn parse_arguments() -> Arguments {
@@ -57,8 +62,9 @@ fn parse_arguments() -> Arguments {
     let port = matches.value_of("port").unwrap().to_owned();
     let precision = clap::value_t!(matches.value_of("precision"), usize).unwrap();
     let ipstack_key = matches.value_of("ipstack-api-key").unwrap().to_owned();
+    let retention_policy = matches.value_of("retention-policy").map(|s| s.to_owned());
 
-    Arguments { host, port, precision, ipstack_key }
+    Arguments { host, port, precision, ipstack_key, retention_policy }
 }
 
 #[tokio::main]
@@ -70,6 +76,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         influxdb_client: influx_db_client::Client::new("http://localhost:8086".parse()?, "monitoring"),
         geoip_resolver: IpStackClient::new(args.ipstack_key),
         geohash_precision: args.precision,
+        retention_policy: args.retention_policy,
     });
 
     loop {
