@@ -30,7 +30,8 @@ pub struct AuthAttemptRecord {
 pub struct Pipeline {
     pub influxdb_client: InfluxDbClient,
     pub geoip_resolver: Box<dyn GeoIPResolver + Sync + Send + 'static>,
-    pub geohash_precision: usize
+    pub geohash_precision: usize,
+    pub retention_policy: Option<String>,
 }
 
 impl Pipeline {
@@ -80,7 +81,7 @@ impl Pipeline {
             .add_field("ip", Value::String(attempt.ip));
 
         self.influxdb_client
-            .write_point(point, None, None)
+            .write_point(point, None, self.retention_policy.as_deref())
             .await?;
 
         Ok(())

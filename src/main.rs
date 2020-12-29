@@ -38,6 +38,10 @@ fn build_options() -> App<'static, 'static> {
                 .takes_value(true)
                 .default_value("7070"),
         )
+        .arg(Arg::with_name("retention-policy")
+             .long("retention-policy")
+             .value_name("RETENTION_POLICY")
+             .takes_value(true))
         .arg(Arg::with_name("precision")
             .long("precision")
             .value_name("PRECISION")
@@ -71,6 +75,7 @@ struct Arguments {
     pub listen_address: String,
     pub precision: usize,
     pub geoip_source: GeoIpSource,
+    pub retention_policy: Option<String>,
 }
 
 fn parse_arguments() -> Arguments {
@@ -78,6 +83,7 @@ fn parse_arguments() -> Arguments {
 
     let listen_address = matches.value_of("listen").unwrap().to_owned();
     let precision = clap::value_t!(matches.value_of("precision"), usize).unwrap();
+    let retention_policy = matches.value_of("retention-policy").map(|s| s.to_owned());
 
     let geoip_source = if matches.is_present("ipstack") {
         let access_key = matches.value_of("ipstack").unwrap().to_owned();
@@ -89,7 +95,7 @@ fn parse_arguments() -> Arguments {
         panic!("Missing ipstack or maxmind argument");
     };
 
-    Arguments { listen_address, precision, geoip_source }
+    Arguments { listen_address, precision, geoip_source, retention_policy }
 }
 
 fn create_geoip_source(source: GeoIpSource) -> Result<Box<dyn GeoIPResolver + Send + Sync + 'static>, Box<dyn Error>> {
@@ -108,6 +114,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         influxdb_client: influx_db_client::Client::new("http://localhost:8086".parse()?, "monitoring"),
         geoip_resolver: create_geoip_source(args.geoip_source)?,
         geohash_precision: args.precision,
+        retention_policy: args.retention_policy,
     });
 
     loop {
