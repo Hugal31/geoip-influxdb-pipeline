@@ -56,6 +56,9 @@ fn build_options() -> App<'static, 'static> {
             .takes_value(true)
             .value_name("DATABASE_PATH")
             .conflicts_with("ipstack"))
+        .arg(Arg::with_name("fill-database")
+            .help("Will try to fill empty geohash in the influxdb database")
+            .long("fill-database"))
 }
 
 enum GeoIpSource {
@@ -71,6 +74,7 @@ struct Arguments {
     pub listen_address: String,
     pub precision: usize,
     pub geoip_source: GeoIpSource,
+    pub fill_database: bool,
 }
 
 fn parse_arguments() -> Arguments {
@@ -78,6 +82,7 @@ fn parse_arguments() -> Arguments {
 
     let listen_address = matches.value_of("listen").unwrap().to_owned();
     let precision = clap::value_t!(matches.value_of("precision"), usize).unwrap();
+    let fill_database = matches.is_present("fill-database");
 
     let geoip_source = if matches.is_present("ipstack") {
         let access_key = matches.value_of("ipstack").unwrap().to_owned();
@@ -89,7 +94,7 @@ fn parse_arguments() -> Arguments {
         panic!("Missing ipstack or maxmind argument");
     };
 
-    Arguments { listen_address, precision, geoip_source }
+    Arguments { listen_address, precision, geoip_source, fill_database }
 }
 
 fn create_geoip_source(source: GeoIpSource) -> Result<Box<dyn GeoIPResolver + Send + Sync + 'static>, Box<dyn Error>> {
@@ -109,6 +114,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         geoip_resolver: create_geoip_source(args.geoip_source)?,
         geohash_precision: args.precision,
     });
+
+    if args.fill_database {
+        pipeline.fill_database().await?;
+
+        return Ok(());
+    }
 
     loop {
         let (socket, _) = listener.accept().await?;

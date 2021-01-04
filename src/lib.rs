@@ -66,6 +66,28 @@ impl Pipeline {
         }
     }
 
+    pub async fn fill_database(&self) -> Result<(), Box<dyn Error>> {
+        let query = self.influxdb_client.query("select ip from \"ssh-auth\" WHERE geohash = ''", None).await?;
+        if let Some(nodes) = query {
+            for node in nodes {
+                if let Some(series) = node.series {
+                    for serie in series {
+                        let ip_idx = serie.columns.iter().position(|s| s == "ip").ok_or(Box::new(format!("Could not find ip field")))?;
+
+                        for record in serie.values {
+                            let ip = record[ip_idx].as_str().ok_or(Box::new(format!("Could not get String IP value")))?;
+                            let geohash = self.get_geohash(ip);
+
+                            self.influxdb_client.write
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(());
+    }
+
     async fn get_geohash(&self, host: &str) -> Result<String, Box<dyn Error>> {
         self.geoip_resolver.get_geoip(host, self.geohash_precision).await
     }
