@@ -73,7 +73,7 @@ impl Pipeline {
 
     async fn store_auth_attempt(&self, attempt: AuthAttemptRecord) -> Result<(), Box<dyn Error>> {
         use influx_db_client::Value;
-        let point = Point::new("ssh-auth")
+        let point = Point::new("ssh_auth")
             .add_timestamp(attempt.time.timestamp())
             .add_tag("username", Value::String(attempt.username))
             .add_tag("geohash", Value::String(attempt.geohash))
