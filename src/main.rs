@@ -1,19 +1,14 @@
 // From https://medium.com/schkn/geolocating-ssh-hackers-in-real-time-108cbc3b5665
 
+use std::env;
 use std::error::Error;
 
 use clap::{App, Arg};
 use tokio::net::TcpListener;
 
-use rsyslog_ssh_geoip_pipeline::{
-    geoip::{
-        ipstack::IpStackClient,
-        maxmind::MaxMindDb,
-    },
-    Pipeline
-};
-use std::sync::Arc;
 use rsyslog_ssh_geoip_pipeline::geoip::GeoIPResolver;
+use rsyslog_ssh_geoip_pipeline::{geoip::maxmind::MaxMindDb, Pipeline};
+use std::sync::Arc;
 
 // TODO Use option groups for maxmind and ipstack
 fn build_options() -> App<'static, 'static> {
@@ -38,37 +33,59 @@ fn build_options() -> App<'static, 'static> {
                 .takes_value(true)
                 .default_value("7070"),
         )
-        .arg(Arg::with_name("retention-policy")
-             .long("retention-policy")
-             .value_name("RETENTION_POLICY")
-             .takes_value(true))
-        .arg(Arg::with_name("precision")
-            .long("precision")
-            .value_name("PRECISION")
-            .help("Precision of the geohash")
-            .takes_value(true)
-            .default_value("3"))
-        .arg(Arg::with_name("ipstack")
-            .long("ipstack")
-            .help("Use ipstack to get the GEOIP info")
-            .takes_value(true)
-            .value_name("ACCESS_KEY")
-            .conflicts_with("maxmind"))
-        .arg(Arg::with_name("maxmind")
-            .long("maxmind")
-            .help("Path the to maxmind city database.")
-            .takes_value(true)
-            .value_name("DATABASE_PATH")
-            .conflicts_with("ipstack"))
+        .arg(
+            Arg::with_name("retention-policy")
+                .long("retention-policy")
+                .value_name("RETENTION_POLICY")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("precision")
+                .long("precision")
+                .value_name("PRECISION")
+                .help("Precision of the s2_cell")
+                .takes_value(true)
+                .default_value("3"),
+        )
+        .arg(
+            Arg::with_name("maxmind")
+                .long("maxmind")
+                .help("Path the to maxmind city database.")
+                .takes_value(true)
+                .value_name("DATABASE_PATH"),
+        )
+        .arg(
+            Arg::with_name("influx-url")
+                .long("influx-url")
+                .help("InfluxDB URL")
+                .takes_value(true)
+                .value_name("INFLUX_URL"),
+        )
+        .arg(
+            Arg::with_name("influx-username")
+                .long("influx-username")
+                .help("InfluxDB username")
+                .takes_value(true)
+                .value_name("INFLUX_USERNAME"),
+        )
+        .arg(
+            Arg::with_name("influx-password")
+                .long("influx-password")
+                .help("InfluxDB password or token")
+                .takes_value(true)
+                .value_name("INFLUX_PASSWORD"),
+        )
+        .arg(
+            Arg::with_name("influx-database")
+                .long("influx-database")
+                .help("InfluxDB database")
+                .takes_value(true)
+                .value_name("DATABASE"),
+        )
 }
 
 enum GeoIpSource {
-    IpStack {
-        access_key: String,
-    },
-    MaxMindDb {
-        database_path: String,
-    }
+    MaxMindDb { database_path: String },
 }
 
 struct Arguments {
@@ -76,6 +93,10 @@ struct Arguments {
     pub precision: usize,
     pub geoip_source: GeoIpSource,
     pub retention_policy: Option<String>,
+    pub influx_address: String,
+    pub influx_username: String,
+    pub influx_password: String,
+    pub influx_database: String,
 }
 
 fn parse_arguments() -> Arguments {
@@ -85,22 +106,50 @@ fn parse_arguments() -> Arguments {
     let precision = clap::value_t!(matches.value_of("precision"), usize).unwrap();
     let retention_policy = matches.value_of("retention-policy").map(|s| s.to_owned());
 
-    let geoip_source = if matches.is_present("ipstack") {
-        let access_key = matches.value_of("ipstack").unwrap().to_owned();
-        GeoIpSource::IpStack { access_key }
-    } else if matches.is_present("maxmind") {
+    let geoip_source = if matches.is_present("maxmind") {
         let database_path = matches.value_of("maxmind").unwrap().to_owned();
         GeoIpSource::MaxMindDb { database_path }
     } else {
         panic!("Missing ipstack or maxmind argument");
     };
 
-    Arguments { listen_address, precision, geoip_source, retention_policy }
+    let influx_address = matches
+        .value_of("influx-url")
+        .map(ToOwned::to_owned)
+        .or_else(|| env::var("INFLUX_URL").ok())
+        .unwrap();
+    let influx_username = matches
+        .value_of("influx-username")
+        .map(ToOwned::to_owned)
+        .or_else(|| env::var("INFLUX_USERNAME").ok())
+        .unwrap();
+    let influx_password = matches
+        .value_of("influx-password")
+        .map(ToOwned::to_owned)
+        .or_else(|| env::var("INFLUX_PASSWORD").ok())
+        .unwrap();
+    let influx_database = matches
+        .value_of("influx-database")
+        .map(ToOwned::to_owned)
+        .or_else(|| env::var("INFLUX_DATABASE").ok())
+        .unwrap();
+
+    Arguments {
+        listen_address,
+        precision,
+        geoip_source,
+        retention_policy,
+        influx_address,
+        influx_username,
+        influx_password,
+        influx_database,
+    }
 }
 
-fn create_geoip_source(source: GeoIpSource) -> Result<Box<dyn GeoIPResolver + Send + Sync + 'static>, Box<dyn Error>> {
+fn create_geoip_source(
+    source: GeoIpSource,
+) -> Result<Box<dyn GeoIPResolver + Send + Sync + 'static>, Box<dyn Error>> {
     Ok(match source {
-        GeoIpSource::IpStack { access_key } => Box::new(IpStackClient::new(access_key)),
         GeoIpSource::MaxMindDb { database_path } => Box::new(MaxMindDb::new(database_path)?),
     })
 }
@@ -111,9 +160,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut listener = TcpListener::bind(args.listen_address).await?;
 
     let pipeline = Arc::new(Pipeline {
-        influxdb_client: influx_db_client::Client::new("http://localhost:8086".parse()?, "monitoring"),
+        influxdb_client: influx_db_client::Client::new(
+            args.influx_address.parse()?,
+            args.influx_database.clone(),
+        )
+        .set_authentication(args.influx_username, args.influx_password),
         geoip_resolver: create_geoip_source(args.geoip_source)?,
-        geohash_precision: args.precision,
+        s2_precision: args.precision,
         retention_policy: args.retention_policy,
     });
 

@@ -22,7 +22,7 @@ struct AuthAttempt {
 pub struct AuthAttemptRecord {
     time: DateTime<Utc>,
     success: bool,
-    geohash: String,
+    s2_cell: String,
     username: String,
     ip: String,
 }
@@ -30,7 +30,7 @@ pub struct AuthAttemptRecord {
 pub struct Pipeline {
     pub influxdb_client: InfluxDbClient,
     pub geoip_resolver: Box<dyn GeoIPResolver + Sync + Send + 'static>,
-    pub geohash_precision: usize,
+    pub s2_precision: usize,
     pub retention_policy: Option<String>,
 }
 
@@ -48,18 +48,18 @@ impl Pipeline {
                 continue;
             }
 
-            let geohash = match self.get_geohash(&attempt.ip).await {
+            let s2_cell = match self.get_s2_cell(&attempt.ip).await {
                 Ok(hash) => hash,
                 Err(e) => {
                     eprintln!("Could not get geohash for {}: {}", attempt.ip, e);
                     continue;
-                },
+                }
             };
 
             let record = AuthAttemptRecord {
                 time: Utc::now(),
                 success: false,
-                geohash,
+                s2_cell,
                 username: attempt.username,
                 ip: attempt.ip,
             };
@@ -67,21 +67,26 @@ impl Pipeline {
         }
     }
 
-    async fn get_geohash(&self, host: &str) -> Result<String, Box<dyn Error>> {
-        self.geoip_resolver.get_geoip(host, self.geohash_precision).await
+    async fn get_s2_cell(&self, ip: &str) -> Result<String, Box<dyn Error>> {
+        let coords = self.geoip_resolver.get_geoip(ip).await?;
+        geoip::s2_cell_from_coords(coords, self.s2_precision)
     }
 
     async fn store_auth_attempt(&self, attempt: AuthAttemptRecord) -> Result<(), Box<dyn Error>> {
-        use influx_db_client::Value;
+        use influx_db_client::{Precision, Value};
         let point = Point::new("ssh_auth")
             .add_timestamp(attempt.time.timestamp())
             .add_tag("username", Value::String(attempt.username))
-            .add_tag("geohash", Value::String(attempt.geohash))
+            .add_tag("s2_cell_id", Value::String(attempt.s2_cell))
             .add_field("success", Value::Boolean(attempt.success))
             .add_field("ip", Value::String(attempt.ip));
 
         self.influxdb_client
-            .write_point(point, None, self.retention_policy.as_deref())
+            .write_point(
+                point,
+                Some(Precision::Seconds),
+                self.retention_policy.as_deref(),
+            )
             .await?;
 
         Ok(())
