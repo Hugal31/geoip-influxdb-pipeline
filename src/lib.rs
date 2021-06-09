@@ -2,7 +2,6 @@ pub mod geoip;
 
 use std::error::Error;
 
-use chrono::{DateTime, Utc};
 use influx_db_client::{Client as InfluxDbClient, Point};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -20,8 +19,6 @@ struct AuthAttempt {
 }
 
 pub struct AuthAttemptRecord {
-    time: DateTime<Utc>,
-    success: bool,
     s2_cell: String,
     username: String,
     ip: String,
@@ -57,8 +54,6 @@ impl Pipeline {
             };
 
             let record = AuthAttemptRecord {
-                time: Utc::now(),
-                success: false,
                 s2_cell,
                 username: attempt.username,
                 ip: attempt.ip,
@@ -75,10 +70,8 @@ impl Pipeline {
     async fn store_auth_attempt(&self, attempt: AuthAttemptRecord) -> Result<(), Box<dyn Error>> {
         use influx_db_client::{Precision, Value};
         let point = Point::new("ssh_auth")
-            .add_timestamp(attempt.time.timestamp())
-            .add_tag("username", Value::String(attempt.username))
-            .add_tag("s2_cell_id", Value::String(attempt.s2_cell))
-            .add_field("success", Value::Boolean(attempt.success))
+            .add_field("username", Value::String(attempt.username))
+            .add_field("s2_cell_id", Value::String(attempt.s2_cell))
             .add_field("ip", Value::String(attempt.ip));
 
         self.influxdb_client
